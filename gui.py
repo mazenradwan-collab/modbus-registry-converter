@@ -21,7 +21,7 @@ class ModbusConverterGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Modbus Registry Converter - Advanced Filter")
-        self.root.geometry("900x800")
+        self.root.geometry("1000x900")
         self.root.resizable(True, True)
         
         try:
@@ -47,32 +47,48 @@ class ModbusConverterGUI:
     def _setup_ui(self):
         """Setup the user interface"""
         
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Create main canvas with scrollbar
+        canvas_frame = ttk.Frame(self.root)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+        canvas = tk.Canvas(canvas_frame, bg='white')
+        scrollbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
         # Title
         title_label = ttk.Label(
-            main_frame,
+            scrollable_frame,
             text="Modbus Registry Converter - Advanced Filter",
             font=("Arial", 14, "bold")
         )
-        title_label.grid(row=0, column=0, columnspan=3, pady=10)
+        title_label.pack(pady=10)
         
         # File Selection Sections
-        self._create_file_section(main_frame, "Input File", 1, self.input_file, "Select Input File", 
+        self._create_file_section(scrollable_frame, "Input File", self.input_file, "Select Input File", 
                                   [("CSV Files", "*.csv"), ("Excel Files", "*.xlsx;*.xls"), ("PDF Files", "*.pdf"), ("All Files", "*.*")])
         
-        self._create_file_section(main_frame, "Output Directory", 4, self.output_file, "Select Output Directory",
+        self._create_file_section(scrollable_frame, "Output Directory", self.output_file, "Select Output Directory",
                                   is_save=True)
         
         # Output Format Section
-        format_frame = ttk.LabelFrame(main_frame, text="Output Format", padding="10")
-        format_frame.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
-        format_frame.columnconfigure(0, weight=1)
+        format_frame = ttk.LabelFrame(scrollable_frame, text="Output Format", padding="10")
+        format_frame.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Radiobutton(format_frame, text="CSV", variable=self.output_format, 
                        value="csv").pack(side=tk.LEFT, padx=10)
@@ -80,20 +96,18 @@ class ModbusConverterGUI:
                        value="excel").pack(side=tk.LEFT, padx=10)
         
         # Filter Section
-        self._create_filter_section(main_frame, 8)
+        self._create_filter_section(scrollable_frame)
         
         # Options Section
-        options_frame = ttk.LabelFrame(main_frame, text="Options", padding="10")
-        options_frame.grid(row=14, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
-        options_frame.columnconfigure(0, weight=1)
+        options_frame = ttk.LabelFrame(scrollable_frame, text="Options", padding="10")
+        options_frame.pack(fill=tk.X, padx=10, pady=10)
         
         ttk.Checkbutton(options_frame, text="Validate Data", 
                        variable=self.validate_var).pack(side=tk.LEFT, padx=10)
         
         # Progress Section
-        progress_frame = ttk.LabelFrame(main_frame, text="Conversion Status", padding="10")
-        progress_frame.grid(row=15, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
-        progress_frame.columnconfigure(0, weight=1)
+        progress_frame = ttk.LabelFrame(scrollable_frame, text="Conversion Status", padding="10")
+        progress_frame.pack(fill=tk.X, padx=10, pady=10)
         
         self.progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate')
         self.progress_bar.pack(fill=tk.X, pady=5)
@@ -102,18 +116,23 @@ class ModbusConverterGUI:
         self.status_label.pack(pady=5)
         
         # Buttons Section
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.grid(row=16, column=0, columnspan=3, pady=20)
+        buttons_frame = ttk.Frame(scrollable_frame)
+        buttons_frame.pack(pady=20)
         
-        ttk.Button(buttons_frame, text="Convert", command=self._on_convert).pack(side=tk.LEFT, padx=5)
-        ttk.Button(buttons_frame, text="Reset", command=self._on_reset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(buttons_frame, text="Exit", command=self.root.quit).pack(side=tk.LEFT, padx=5)
+        convert_btn = ttk.Button(buttons_frame, text="Convert", command=self._on_convert, width=15)
+        convert_btn.pack(side=tk.LEFT, padx=5)
+        
+        reset_btn = ttk.Button(buttons_frame, text="Reset", command=self._on_reset, width=15)
+        reset_btn.pack(side=tk.LEFT, padx=5)
+        
+        exit_btn = ttk.Button(buttons_frame, text="Exit", command=self.root.quit, width=15)
+        exit_btn.pack(side=tk.LEFT, padx=5)
     
-    def _create_file_section(self, parent, title, row, var, dialog_title, file_types=None, is_save=False):
+    def _create_file_section(self, parent, title, var, dialog_title, file_types=None, is_save=False):
         """Create a file selection section"""
         
         frame = ttk.LabelFrame(parent, text=title, padding="10")
-        frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        frame.pack(fill=tk.X, padx=10, pady=10)
         frame.columnconfigure(1, weight=1)
         
         path_label = ttk.Label(frame, text="Path:", width=10)
@@ -136,11 +155,11 @@ class ModbusConverterGUI:
             )
         browse_btn.grid(row=0, column=2, padx=5)
     
-    def _create_filter_section(self, parent, row):
+    def _create_filter_section(self, parent):
         """Create filter configuration section"""
         
         filter_frame = ttk.LabelFrame(parent, text="Advanced Filter (Optional)", padding="10")
-        filter_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        filter_frame.pack(fill=tk.X, padx=10, pady=10)
         filter_frame.columnconfigure(0, weight=1)
         
         # Enable filter checkbox
@@ -164,30 +183,38 @@ class ModbusConverterGUI:
         self.category_vars = {}
         categories = self.registry_filter.get_available_categories()
         
+        # Create category checkboxes in a grid for better layout
+        cat_grid_frame = ttk.Frame(filter_frame)
+        cat_grid_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        col = 0
         for idx, (category, info) in enumerate(categories.items()):
             var = tk.BooleanVar()
             self.category_vars[category] = var
             
             ttk.Checkbutton(
-                filter_frame,
-                text=f"{category.capitalize()} - {info['description']}",
+                cat_grid_frame,
+                text=f"{category.capitalize()}",
                 variable=var,
                 command=self._update_selected_categories
-            ).pack(anchor=tk.W, padx=20, pady=2)
+            ).grid(row=idx//2, column=idx%2, sticky=tk.W, padx=10, pady=2)
         
         # Presets section
         preset_frame = ttk.LabelFrame(filter_frame, text="Filter Presets", padding="10")
         preset_frame.pack(fill=tk.X, pady=10)
-        preset_frame.columnconfigure(0, weight=1)
         
         presets = get_filter_presets()
         
-        for preset_name, preset_config in presets.items():
+        preset_buttons_frame = ttk.Frame(preset_frame)
+        preset_buttons_frame.pack(fill=tk.X)
+        
+        for idx, (preset_name, preset_config) in enumerate(presets.items()):
             ttk.Button(
-                preset_frame,
+                preset_buttons_frame,
                 text=f"{preset_name.replace('_', ' ').title()}",
-                command=lambda name=preset_name, config=preset_config: self._apply_preset(name, config)
-            ).pack(side=tk.LEFT, padx=5, pady=5)
+                command=lambda name=preset_name, config=preset_config: self._apply_preset(name, config),
+                width=20
+            ).grid(row=idx//3, column=idx%3, padx=5, pady=5)
         
         # Keywords section
         keywords_frame = ttk.LabelFrame(filter_frame, text="Custom Keywords", padding="10")
@@ -208,10 +235,6 @@ class ModbusConverterGUI:
     def _on_filter_toggle(self):
         """Enable/disable filter controls"""
         state = tk.NORMAL if self.use_filter.get() else tk.DISABLED
-        
-        for var in self.category_vars.values():
-            # Cannot directly disable checkbuttons, so we'll handle in conversion
-            pass
         
         self.include_keywords_entry.config(state=state)
         self.exclude_keywords_entry.config(state=state)
