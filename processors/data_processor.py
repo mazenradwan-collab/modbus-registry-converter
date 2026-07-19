@@ -1,4 +1,4 @@
-"""Advanced intelligent data processor with flexible field detection"""
+"""Advanced intelligent data processor with smart column detection"""
 
 import pandas as pd
 import re
@@ -16,71 +16,180 @@ from config import (
 )
 
 
-class FlexibleColumnMatcher:
-    """Flexible column matcher that finds any field that could be a name"""
+class SmartColumnDetector:
+    """Intelligently detect columns by analyzing data patterns"""
     
     def __init__(self):
         self.column_map = {}
         self.all_columns = []
-        self.name_columns = []  # Columns that look like names
+        self.detected_patterns = {}
     
-    def match_columns(self, dataframe):
-        """Match columns and find name fields"""
+    def analyze_column_content(self, dataframe):
+        """Analyze column content to detect purpose"""
         
         self.all_columns = list(dataframe.columns)
-        df_columns_lower = [str(col).lower().strip() for col in self.all_columns]
+        df_lower = {col: str(col).lower().strip() for col in self.all_columns}
         
-        print(f"\n[ColumnMatcher] Available columns: {self.all_columns}")
+        print(f"\n[SmartColumnDetector] Analyzing {len(self.all_columns)} columns...")
+        print(f"[SmartColumnDetector] Column names: {self.all_columns}\n")
         
-        # Find columns that look like names
-        name_keywords = ['name', 'label', 'registerlabel', 'register_label', 'description', 'id']
-        self.name_columns = []
+        # Analyze each column
+        for col in self.all_columns:
+            analysis = self._analyze_single_column(dataframe[col], col)
+            self.detected_patterns[col] = analysis
+            print(f"[SmartColumnDetector] {col:25s} -> {analysis['detected_type']:20s} (samples: {analysis['sample_values']})")
         
-        for i, col_lower in enumerate(df_columns_lower):
-            for keyword in name_keywords:
-                if keyword in col_lower or col_lower in keyword:
-                    self.name_columns.append(self.all_columns[i])
-                    break
-        
-        print(f"[ColumnMatcher] Name columns found: {self.name_columns}")
-        
-        # Map standard fields
-        field_patterns = {
-            'address': ['address', 'modbusaddr', 'modbus_addr', 'addr'],
-            'data_type': ['datatype', 'data_type', 'format', 'dtype'],
-            'access': ['access', 'requesttype', 'request_type'],
-            'register_count': ['registercount', 'register_count', 'count'],
-            'scale_factor': ['scalefactor', 'scale_factor', 'scale', 'mask'],
-            'unit': ['unit', 'units'],
-            'polling_ms': ['polling', 'polling_ms'],
-            'enabled': ['enabled', 'active'],
-        }
-        
-        self.column_map = {}
-        
-        for field, patterns in field_patterns.items():
-            for i, col_lower in enumerate(df_columns_lower):
-                for pattern in patterns:
-                    if pattern in col_lower or col_lower in pattern:
-                        self.column_map[field] = self.all_columns[i]
-                        break
-                if field in self.column_map:
-                    break
-        
-        print(f"[ColumnMatcher] Mapped fields: {self.column_map}")
+        # Map columns based on analysis
+        self._map_columns_by_analysis(df_lower)
         
         return self.column_map
     
-    def get_name_from_record(self, record):
-        """Get name from record using any name column"""
+    def _analyze_single_column(self, series, col_name):
+        """Analyze a single column to determine its type"""
         
-        # Try each name column
-        for name_col in self.name_columns:
-            value = record.get(name_col)
-            if value is not None:
-                val_str = str(value).strip()
-                if val_str and val_str.lower() not in ['nan', 'none', '']:
-                    return val_str
+        analysis = {
+            'name': col_name,
+            'detected_type': 'UNKNOWN',
+            'sample_values': [],
+            'numeric_count': 0,
+            'max_value': 0,
+            'has_addresses': False
+        }
+        
+        # Get non-null values
+        values = series.dropna().astype(str).str.strip()
+        values = values[values != '']
+        
+        if len(values) == 0:
+            return analysis
+        
+        sample_vals = values.head(3).tolist()
+        analysis['sample_values'] = sample_vals
+        
+        col_lower = col_name.lower().strip()
+        
+        # Check column name first
+        if any(name in col_lower for name in ['registerla', 'name', 'label', 'description']):
+            analysis['detected_type'] = 'REGISTER_NAME'
+            return analysis
+        
+        if any(name in col_lower for name in ['address', 'modbusaddr', 'addr', 'modbus']):
+            analysis['detected_type'] = 'ADDRESS'
+            return analysis
+        
+        if any(name in col_lower for name in ['datatype', 'data_type', 'format', 'type']):
+            analysis['detected_type'] = 'DATA_TYPE'
+            return analysis
+        
+        if any(name in col_lower for name in ['access', 'requesttype', 'request_type', 'permission']):
+            analysis['detected_type'] = 'ACCESS'
+            return analysis
+        
+        if any(name in col_lower for name in ['unit', 'units', 'uom']):
+            analysis['detected_type'] = 'UNIT'
+            return analysis
+        
+        # Analyze by content if name doesn't match
+        try:
+            # Try to convert to numeric
+            numeric_values = pd.to_numeric(values, errors='coerce')
+            numeric_count = numeric_values.notna().sum()
+            
+            if numeric_count > len(values) * 0.8:  # Most values are numeric
+                max_val = numeric_values.max()
+                analysis['numeric_count'] = numeric_count
+                analysis['max_value'] = max_val
+                
+                # Determine what kind of number
+                if max_val > 100000:  # Large numbers likely addresses
+                    analysis['detected_type'] = 'ADDRESS'
+                    analysis['has_addresses'] = True
+                elif max_val < 100:  # Small numbers likely counts or codes
+                    analysis['detected_type'] = 'REGISTER_COUNT'
+                else:  # Medium numbers
+                    analysis['detected_type'] = 'NUMERIC_FIELD'
+                
+                return analysis
+        except:
+            pass
+        
+        # Check if contains common patterns
+        text_samples = ' '.join(sample_vals).lower()
+        
+        if any(word in text_samples for word in ['read', 'write', 'rw']):
+            analysis['detected_type'] = 'ACCESS'
+        elif any(word in text_samples for word in ['int', 'float', 'ascii', 'bool', 'uint']):
+            analysis['detected_type'] = 'DATA_TYPE'
+        elif any(word in text_samples for word in ['coil', 'input', 'holding', 'register']):
+            analysis['detected_type'] = 'REGISTER_TYPE'
+        else:
+            analysis['detected_type'] = 'TEXT_FIELD'
+        
+        return analysis
+    
+    def _map_columns_by_analysis(self, df_lower):
+        """Map detected columns to standard fields"""
+        
+        # Priority mapping for address columns
+        address_candidates = []
+        name_candidates = []
+        datatype_candidates = []
+        access_candidates = []
+        unit_candidates = []
+        
+        for col, analysis in self.detected_patterns.items():
+            detected_type = analysis['detected_type']
+            
+            if detected_type == 'ADDRESS':
+                address_candidates.append((col, analysis))
+            elif detected_type == 'REGISTER_NAME':
+                name_candidates.append((col, analysis))
+            elif detected_type == 'DATA_TYPE':
+                datatype_candidates.append((col, analysis))
+            elif detected_type == 'ACCESS':
+                access_candidates.append((col, analysis))
+            elif detected_type == 'UNIT':
+                unit_candidates.append((col, analysis))
+        
+        # Assign best matches
+        if address_candidates:
+            best_addr_col = max(address_candidates, key=lambda x: x[1]['max_value'])[0]
+            self.column_map['address'] = best_addr_col
+            print(f"[SmartColumnDetector] Mapped 'address' -> {best_addr_col}")
+        
+        if name_candidates:
+            best_name_col = name_candidates[0][0]
+            self.column_map['register_name'] = best_name_col
+            print(f"[SmartColumnDetector] Mapped 'register_name' -> {best_name_col}")
+        
+        if datatype_candidates:
+            best_dtype_col = datatype_candidates[0][0]
+            self.column_map['data_type'] = best_dtype_col
+            print(f"[SmartColumnDetector] Mapped 'data_type' -> {best_dtype_col}")
+        
+        if access_candidates:
+            best_access_col = access_candidates[0][0]
+            self.column_map['access'] = best_access_col
+            print(f"[SmartColumnDetector] Mapped 'access' -> {best_access_col}")
+        
+        if unit_candidates:
+            best_unit_col = unit_candidates[0][0]
+            self.column_map['unit'] = best_unit_col
+            print(f"[SmartColumnDetector] Mapped 'unit' -> {best_unit_col}")
+    
+    def get_name_from_record(self, record):
+        """Get name from record"""
+        
+        if 'register_name' not in self.column_map:
+            return None
+        
+        col = self.column_map['register_name']
+        value = record.get(col)
+        
+        if value:
+            val_str = str(value).strip()
+            if val_str and val_str.lower() not in ['nan', 'none', '']:
+                return val_str
         
         return None
     
@@ -154,11 +263,11 @@ class SmartAddressParser:
 
 
 class AdvancedDataProcessor:
-    """Process and normalize registry data"""
+    """Process and normalize registry data with smart column detection"""
     
     def __init__(self):
         self.warnings = []
-        self.column_matcher = FlexibleColumnMatcher()
+        self.column_detector = SmartColumnDetector()
         self.address_parser = SmartAddressParser()
         self.skipped_rows = 0
         self.processed_rows = 0
@@ -180,10 +289,13 @@ class AdvancedDataProcessor:
         except:
             raw_data_clean = raw_data
         
-        self.column_matcher.match_columns(pd.DataFrame(raw_data_clean))
+        # Analyze columns with smart detector
+        df_analysis = pd.DataFrame(raw_data_clean)
+        self.column_detector.analyze_column_content(df_analysis)
         
         print(f"\n[DataProcessor] Starting processing...")
         print(f"[DataProcessor] Total records to process: {len(raw_data_clean)}")
+        print(f"[DataProcessor] Column mapping: {self.column_detector.column_map}\n")
         
         processed_data = []
         
@@ -209,8 +321,8 @@ class AdvancedDataProcessor:
     def _normalize_record(self, record, idx):
         """Normalize a single record"""
         
-        # Get name using flexible matcher
-        register_name = self.column_matcher.get_name_from_record(record)
+        # Get name
+        register_name = self.column_detector.get_name_from_record(record)
         
         if not register_name:
             return None
@@ -222,7 +334,7 @@ class AdvancedDataProcessor:
         display_name = self._clean_display_name(register_name)
         
         # Get address
-        raw_address = self.column_matcher.get_value(record, 'address')
+        raw_address = self.column_detector.get_value(record, 'address')
         extracted_fc, extracted_addr = self.address_parser.parse_address(raw_address)
         
         # Get function code
@@ -235,41 +347,28 @@ class AdvancedDataProcessor:
         address = extracted_addr if extracted_addr is not None else 0
         
         # Data type
-        data_type = self.column_matcher.get_value(record, 'data_type')
+        data_type = self.column_detector.get_value(record, 'data_type')
         data_type = self._normalize_data_type(data_type)
         
         # Register count
-        register_count = self.column_matcher.get_value(record, 'register_count')
-        try:
-            register_count = int(register_count) if register_count else DEFAULT_REGISTER_COUNT
-        except:
-            register_count = DEFAULT_REGISTER_COUNT
+        register_count = DEFAULT_REGISTER_COUNT
         
         # Scale factor
-        scale_factor = self.column_matcher.get_value(record, 'scale_factor')
-        try:
-            scale_factor = float(scale_factor) if scale_factor else DEFAULT_SCALE_FACTOR
-        except:
-            scale_factor = DEFAULT_SCALE_FACTOR
+        scale_factor = DEFAULT_SCALE_FACTOR
         
         # Unit
-        unit = self.column_matcher.get_value(record, 'unit')
+        unit = self.column_detector.get_value(record, 'unit')
         unit = str(unit).strip() if unit else ''
         
         # Access
-        access = self.column_matcher.get_value(record, 'access')
+        access = self.column_detector.get_value(record, 'access')
         access = self._normalize_access_type(access)
         
         # Polling
-        polling_ms = self.column_matcher.get_value(record, 'polling_ms')
-        try:
-            polling_ms = int(polling_ms) if polling_ms else DEFAULT_POLLING_MS
-        except:
-            polling_ms = DEFAULT_POLLING_MS
+        polling_ms = DEFAULT_POLLING_MS
         
         # Enabled
-        enabled = self.column_matcher.get_value(record, 'enabled')
-        enabled = self._normalize_boolean(enabled, DEFAULT_ENABLED)
+        enabled = DEFAULT_ENABLED
         
         return {
             'RegisterName': str(register_name).strip(),
@@ -344,14 +443,6 @@ class AdvancedDataProcessor:
             return 'Write'
         
         return 'Read'
-    
-    def _normalize_boolean(self, value, default=True):
-        """Convert to boolean"""
-        if value is None:
-            return default
-        
-        value_str = str(value).lower().strip()
-        return value_str in ['true', 'yes', '1', 'enabled', 'active', 'on']
     
     def validate(self, data):
         """Validate processed data"""
