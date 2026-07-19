@@ -1,8 +1,7 @@
-"""Advanced intelligent data processor with smart column detection"""
+"""Advanced intelligent data processor - FINAL VERSION with complete field detection"""
 
 import pandas as pd
 import re
-from difflib import SequenceMatcher
 from config import (
     OUTPUT_COLUMNS,
     FUNCTION_CODE_MAP,
@@ -17,7 +16,7 @@ from config import (
 
 
 class SmartColumnDetector:
-    """Intelligently detect columns by analyzing data patterns"""
+    """Intelligently detect all columns by analyzing data patterns"""
     
     def __init__(self):
         self.column_map = {}
@@ -28,10 +27,9 @@ class SmartColumnDetector:
         """Analyze column content to detect purpose"""
         
         self.all_columns = list(dataframe.columns)
-        df_lower = {col: str(col).lower().strip() for col in self.all_columns}
         
         print(f"\n[SmartColumnDetector] Analyzing {len(self.all_columns)} columns...")
-        print(f"[SmartColumnDetector] Column names: {self.all_columns}\n")
+        print(f"[SmartColumnDetector] Available columns: {self.all_columns}\n")
         
         # Analyze each column
         for col in self.all_columns:
@@ -39,8 +37,10 @@ class SmartColumnDetector:
             self.detected_patterns[col] = analysis
             print(f"[SmartColumnDetector] {col:25s} -> {analysis['detected_type']:20s} (samples: {analysis['sample_values']})")
         
+        print()  # Newline
+        
         # Map columns based on analysis
-        self._map_columns_by_analysis(df_lower)
+        self._map_columns_by_analysis()
         
         return self.column_map
     
@@ -63,62 +63,74 @@ class SmartColumnDetector:
         if len(values) == 0:
             return analysis
         
-        sample_vals = values.head(3).tolist()
+        sample_vals = values.head(2).tolist()
         analysis['sample_values'] = sample_vals
         
         col_lower = col_name.lower().strip()
         
-        # Check column name first
-        if any(name in col_lower for name in ['registerla', 'name', 'label', 'description']):
-            analysis['detected_type'] = 'REGISTER_NAME'
-            return analysis
+        # Check column name first - MOST IMPORTANT
+        name_keywords = ['registerlabel', 'register_label', 'name', 'label', 'description']
+        for keyword in name_keywords:
+            if keyword in col_lower or col_lower in keyword:
+                analysis['detected_type'] = 'REGISTER_NAME'
+                return analysis
         
-        if any(name in col_lower for name in ['address', 'modbusaddr', 'addr', 'modbus']):
-            analysis['detected_type'] = 'ADDRESS'
-            return analysis
+        # Check for address columns
+        addr_keywords = ['address', 'modbusaddr', 'modbus_addr', 'addr', 'modbus']
+        for keyword in addr_keywords:
+            if keyword in col_lower or col_lower in keyword:
+                analysis['detected_type'] = 'ADDRESS'
+                return analysis
         
-        if any(name in col_lower for name in ['datatype', 'data_type', 'format', 'type']):
-            analysis['detected_type'] = 'DATA_TYPE'
-            return analysis
+        # Check for data type
+        dtype_keywords = ['datatype', 'data_type', 'format', 'dtype']
+        for keyword in dtype_keywords:
+            if keyword in col_lower or col_lower in keyword:
+                analysis['detected_type'] = 'DATA_TYPE'
+                return analysis
         
-        if any(name in col_lower for name in ['access', 'requesttype', 'request_type', 'permission']):
-            analysis['detected_type'] = 'ACCESS'
-            return analysis
+        # Check for access/request type - CRITICAL
+        access_keywords = ['access', 'requesttype', 'request_type', 'permission', 'mode']
+        for keyword in access_keywords:
+            if keyword in col_lower or col_lower in keyword:
+                analysis['detected_type'] = 'ACCESS'
+                return analysis
         
-        if any(name in col_lower for name in ['unit', 'units', 'uom']):
-            analysis['detected_type'] = 'UNIT'
-            return analysis
+        # Check for units
+        unit_keywords = ['unit', 'units', 'uom']
+        for keyword in unit_keywords:
+            if keyword in col_lower or col_lower in keyword:
+                analysis['detected_type'] = 'UNIT'
+                return analysis
         
-        # Analyze by content if name doesn't match
+        # Analyze by content
         try:
-            # Try to convert to numeric
             numeric_values = pd.to_numeric(values, errors='coerce')
             numeric_count = numeric_values.notna().sum()
             
-            if numeric_count > len(values) * 0.8:  # Most values are numeric
+            if numeric_count > len(values) * 0.8:
                 max_val = numeric_values.max()
                 analysis['numeric_count'] = numeric_count
                 analysis['max_value'] = max_val
                 
-                # Determine what kind of number
-                if max_val > 100000:  # Large numbers likely addresses
+                if max_val > 100000:
                     analysis['detected_type'] = 'ADDRESS'
                     analysis['has_addresses'] = True
-                elif max_val < 100:  # Small numbers likely counts or codes
+                elif max_val < 100:
                     analysis['detected_type'] = 'REGISTER_COUNT'
-                else:  # Medium numbers
+                else:
                     analysis['detected_type'] = 'NUMERIC_FIELD'
                 
                 return analysis
         except:
             pass
         
-        # Check if contains common patterns
+        # Check text patterns
         text_samples = ' '.join(sample_vals).lower()
         
-        if any(word in text_samples for word in ['read', 'write', 'rw']):
+        if any(word in text_samples for word in ['read', 'write', 'rw', ' r ', ' w ']):
             analysis['detected_type'] = 'ACCESS'
-        elif any(word in text_samples for word in ['int', 'float', 'ascii', 'bool', 'uint']):
+        elif any(word in text_samples for word in ['int', 'float', 'ascii', 'bool', 'uint', 'datetime']):
             analysis['detected_type'] = 'DATA_TYPE'
         elif any(word in text_samples for word in ['coil', 'input', 'holding', 'register']):
             analysis['detected_type'] = 'REGISTER_TYPE'
@@ -127,15 +139,16 @@ class SmartColumnDetector:
         
         return analysis
     
-    def _map_columns_by_analysis(self, df_lower):
+    def _map_columns_by_analysis(self):
         """Map detected columns to standard fields"""
         
-        # Priority mapping for address columns
+        # Priority mapping
         address_candidates = []
         name_candidates = []
         datatype_candidates = []
         access_candidates = []
         unit_candidates = []
+        registertype_candidates = []
         
         for col, analysis in self.detected_patterns.items():
             detected_type = analysis['detected_type']
@@ -150,9 +163,12 @@ class SmartColumnDetector:
                 access_candidates.append((col, analysis))
             elif detected_type == 'UNIT':
                 unit_candidates.append((col, analysis))
+            elif detected_type == 'REGISTER_TYPE':
+                registertype_candidates.append((col, analysis))
         
         # Assign best matches
         if address_candidates:
+            # Choose address with highest max value
             best_addr_col = max(address_candidates, key=lambda x: x[1]['max_value'])[0]
             self.column_map['address'] = best_addr_col
             print(f"[SmartColumnDetector] Mapped 'address' -> {best_addr_col}")
@@ -176,6 +192,13 @@ class SmartColumnDetector:
             best_unit_col = unit_candidates[0][0]
             self.column_map['unit'] = best_unit_col
             print(f"[SmartColumnDetector] Mapped 'unit' -> {best_unit_col}")
+        
+        if registertype_candidates:
+            best_regtype_col = registertype_candidates[0][0]
+            self.column_map['register_type'] = best_regtype_col
+            print(f"[SmartColumnDetector] Mapped 'register_type' -> {best_regtype_col}")
+        
+        print()  # Newline
     
     def get_name_from_record(self, record):
         """Get name from record"""
@@ -263,7 +286,7 @@ class SmartAddressParser:
 
 
 class AdvancedDataProcessor:
-    """Process and normalize registry data with smart column detection"""
+    """Process and normalize registry data with complete field detection"""
     
     def __init__(self):
         self.warnings = []
@@ -293,7 +316,7 @@ class AdvancedDataProcessor:
         df_analysis = pd.DataFrame(raw_data_clean)
         self.column_detector.analyze_column_content(df_analysis)
         
-        print(f"\n[DataProcessor] Starting processing...")
+        print(f"[DataProcessor] Starting processing...")
         print(f"[DataProcessor] Total records to process: {len(raw_data_clean)}")
         print(f"[DataProcessor] Column mapping: {self.column_detector.column_map}\n")
         
@@ -311,7 +334,7 @@ class AdvancedDataProcessor:
                 self.warnings.append(f"Row {idx + 1}: {str(e)}")
                 self.skipped_rows += 1
         
-        print(f"\n[DataProcessor] Processing completed:")
+        print(f"[DataProcessor] Processing completed:")
         print(f"  Processed: {self.processed_rows}")
         print(f"  Skipped: {self.skipped_rows}")
         print(f"  Total: {len(raw_data_clean)}\n")
@@ -321,7 +344,7 @@ class AdvancedDataProcessor:
     def _normalize_record(self, record, idx):
         """Normalize a single record"""
         
-        # Get name
+        # Get name - CRITICAL
         register_name = self.column_detector.get_name_from_record(record)
         
         if not register_name:
@@ -340,8 +363,12 @@ class AdvancedDataProcessor:
         # Get function code
         function_code = extracted_fc if extracted_fc else 4
         
-        # Get register type
-        register_type = self._get_register_type_from_function_code(function_code)
+        # Get register type from column or from function code
+        register_type = self.column_detector.get_value(record, 'register_type')
+        if not register_type:
+            register_type = self._get_register_type_from_function_code(function_code)
+        else:
+            register_type = self._normalize_register_type(register_type)
         
         # Use extracted address
         address = extracted_addr if extracted_addr is not None else 0
@@ -360,7 +387,7 @@ class AdvancedDataProcessor:
         unit = self.column_detector.get_value(record, 'unit')
         unit = str(unit).strip() if unit else ''
         
-        # Access
+        # Access - CRITICAL: Get from RequestType or Access column
         access = self.column_detector.get_value(record, 'access')
         access = self._normalize_access_type(access)
         
@@ -404,6 +431,26 @@ class AdvancedDataProcessor:
         }
         return fc_to_type.get(function_code, 'Holding Register')
     
+    def _normalize_register_type(self, value):
+        """Normalize register type"""
+        if not value:
+            return 'Holding Register'
+        
+        value_str = str(value).lower().strip()
+        
+        type_map = {
+            'coil': 'Coil',
+            'discrete': 'Discrete Input',
+            'input': 'Input Register',
+            'holding': 'Holding Register',
+        }
+        
+        for key, regtype in type_map.items():
+            if key in value_str:
+                return regtype
+        
+        return 'Holding Register'
+    
     def _normalize_data_type(self, value):
         """Normalize data type"""
         if not value:
@@ -431,16 +478,19 @@ class AdvancedDataProcessor:
         return 'INT16'
     
     def _normalize_access_type(self, value):
-        """Normalize access type"""
+        """Normalize access type - CRITICAL"""
         if not value:
             return 'Read'
         
         value_str = str(value).lower().strip()
         
-        if 'rw' in value_str:
+        # Check for different access patterns
+        if 'rw' in value_str or 'read/write' in value_str or 'read-write' in value_str:
             return 'Read/Write'
-        elif 'w' in value_str:
+        elif 'w' in value_str and 'r' not in value_str:
             return 'Write'
+        elif 'r' in value_str:
+            return 'Read'
         
         return 'Read'
     
