@@ -1,4 +1,4 @@
-"""Advanced CSV file converter with intelligent header detection for tab-separated files"""
+"""Advanced CSV file converter with intelligent header detection for complex files"""
 
 import pandas as pd
 from pathlib import Path
@@ -7,120 +7,143 @@ from converters.base_converter import BaseConverter
 
 
 class SmartCSVReader:
-    """Intelligently reads CSV files with complex structures, including tab-separated"""
+    """Intelligently reads CSV files with complex structures"""
     
     def __init__(self):
         self.detected_header_row = 0
-        self.detected_data_start_row = 1
-        self.separator = ','
+        self.detected_separator = None
         self.records_read = 0
         self.records_skipped = 0
     
-    def detect_separator(self, file_path: Path) -> str:
-        """Detect if file is comma or tab separated"""
+    def detect_separator_and_read(self, file_path: Path, encoding: str = 'utf-8'):
+        """
+        Try multiple separators and return best result
+        """
         
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                first_line = f.readline()
+        separators_to_try = ['\t', ',', ';', '|', '  ']  # Tab first, then others
+        best_result = None
+        best_columns = 0
+        best_separator = None
+        
+        for sep in separators_to_try:
+            try:
+                df_test = pd.read_csv(file_path, sep=sep, encoding=encoding, nrows=5)
+                num_cols = len(df_test.columns)
                 
-                # Count separators
-                comma_count = first_line.count(',')
-                tab_count = first_line.count('\t')
+                # Check if this separator gives us reasonable columns
+                if num_cols > best_columns:
+                    best_columns = num_cols
+                    best_separator = sep
+                    
+                print(f"[CSV Reader] Separator '{repr(sep)}': {num_cols} columns")
                 
-                if tab_count > comma_count:
-                    return '\t'
-                return ','
-        except:
-            return ','
+            except Exception as e:
+                print(f"[CSV Reader] Separator '{repr(sep)}' failed: {e}")
+                continue
+        
+        if best_separator is None:
+            raise ValueError("Could not determine file separator")
+        
+        self.detected_separator = best_separator
+        print(f"[CSV Reader] Using separator: {repr(best_separator)}")
+        
+        return best_separator
     
     def read_csv_smart(self, file_path: Path, encoding: str = 'utf-8') -> List[Dict[str, Any]]:
         """
-        Intelligently read CSV/TSV file with complex structure
+        Intelligently read CSV file with complex structure
         """
         
-        separator = self.detect_separator(file_path)
+        # Detect best separator
+        separator = self.detect_separator_and_read(file_path, encoding)
         
         try:
-            # Read with detected separator
+            # Read with best separator
             df = pd.read_csv(
                 file_path,
                 sep=separator,
                 encoding=encoding,
-                dtype=str  # Read everything as string first
+                dtype=str
             )
             
-            # Clean column names - remove extra spaces
+            print(f"\n[CSV Reader] Initial read:")
+            print(f"  Rows: {len(df)}")
+            print(f"  Columns: {len(df.columns)}")
+            print(f"  Column names: {list(df.columns)}")
+            
+            # Clean column names - remove extra spaces and duplicates
+            original_cols = list(df.columns)
             df.columns = [str(col).strip() for col in df.columns]
             
-            print(f"[CSV Smart Reader] Detected separator: {'TAB' if separator == '\t' else 'COMMA'}")
-            print(f"[CSV Smart Reader] Original columns: {list(df.columns)}")
-            print(f"[CSV Smart Reader] Original rows: {len(df)}")
+            print(f"\n[CSV Reader] After column cleanup:")
+            print(f"  Column names: {list(df.columns)}")
             
             # Remove completely empty rows
             df = df.dropna(how='all')
             
-            # Remove rows where ALL columns are empty/whitespace
-            df_clean = df.copy()
-            for col in df_clean.columns:
-                df_clean[col] = df_clean[col].fillna('').astype(str).str.strip()
+            # Clean whitespace in all cells
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].fillna('').astype(str).str.strip()
             
-            # Keep only rows that have at least some data
-            df = df[df_clean.replace('', pd.NA).notna().any(axis=1)]
+            # Remove rows where ALL columns are empty
+            df_mask = (df.replace('', pd.NA).notna().any(axis=1))
+            df = df[df_mask]
             
-            print(f"[CSV Smart Reader] Rows after cleaning empty: {len(df)}")
+            print(f"[CSV Reader] After removing empty rows: {len(df)} rows")
             
-            # Remove completely empty columns (all NaN or all empty strings)
+            # Remove completely empty columns
             df = df.dropna(axis=1, how='all')
             
-            # Also remove columns that are completely empty strings
+            # Remove columns that are all empty strings
+            cols_to_keep = []
             for col in df.columns:
-                if df[col].astype(str).str.strip().eq('').all():
-                    df = df.drop(columns=[col])
+                if not (df[col].astype(str).str.strip() == '').all():
+                    cols_to_keep.append(col)
             
-            print(f"[CSV Smart Reader] Columns after cleaning empty: {list(df.columns)}")
-            print(f"[CSV Smart Reader] Final rows: {len(df)}")
+            df = df[cols_to_keep]
+            
+            print(f"[CSV Reader] After removing empty columns: {len(df.columns)} columns")
+            print(f"[CSV Reader] Final columns: {list(df.columns)}")
             
             # Convert to list of dicts
             records = df.to_dict('records')
             
-            # Clean records - remove empty entries and standardize
+            # Clean records
             cleaned_records = []
-            skipped = 0
             
             for record in records:
                 cleaned_record = {}
                 has_data = False
                 
                 for key, value in record.items():
-                    if pd.isna(value) or value is None:
-                        cleaned_record[key] = None
-                    elif isinstance(value, str):
+                    # Skip completely empty columns
+                    if pd.isna(value) or value is None or value == '':
+                        continue
+                    
+                    if isinstance(value, str):
                         cleaned_val = value.strip()
                         if cleaned_val:
                             cleaned_record[key] = cleaned_val
                             has_data = True
-                        else:
-                            cleaned_record[key] = None
                     else:
                         cleaned_record[key] = value
                         has_data = True
                 
-                # Only add record if it has at least one non-empty field
                 if has_data:
                     cleaned_records.append(cleaned_record)
-                else:
-                    skipped += 1
             
             self.records_read = len(cleaned_records)
-            self.records_skipped = skipped
+            self.records_skipped = len(records) - len(cleaned_records)
             
-            print(f"[CSV Smart Reader] Records with data: {self.records_read}")
-            print(f"[CSV Smart Reader] Empty records skipped: {self.records_skipped}")
+            print(f"\n[CSV Reader] Final result:")
+            print(f"  Records with data: {self.records_read}")
+            print(f"  Empty records removed: {self.records_skipped}")
             
             return cleaned_records
             
         except Exception as e:
-            print(f"Error reading CSV with smart reader: {e}")
+            print(f"Error reading CSV: {e}")
             raise
 
 
@@ -133,10 +156,9 @@ class CSVConverter(BaseConverter):
     
     def read(self, file_path):
         """
-        Read data from CSV file using intelligent header detection
+        Read data from CSV file using intelligent separator detection
         
-        Supports both comma and tab-separated files
-        Automatically detects and skips empty rows/columns
+        Automatically detects tab, comma, semicolon, pipe, or space separators
         """
         
         file_path = Path(file_path)
@@ -150,16 +172,16 @@ class CSVConverter(BaseConverter):
         last_error = None
         for encoding in encodings:
             try:
+                print(f"\n[CSV Converter] Trying encoding: {encoding}")
                 self.data = self.smart_reader.read_csv_smart(file_path, encoding=encoding)
                 print(f"[CSV Converter] Successfully read with encoding: {encoding}")
-                print(f"[CSV Converter] Total records loaded: {len(self.data)}")
+                print(f"[CSV Converter] Total records: {len(self.data)}\n")
                 return self.data
             except Exception as e:
                 last_error = e
-                print(f"[CSV Converter] Failed with encoding {encoding}: {e}")
+                print(f"[CSV Converter] Failed with {encoding}: {e}")
                 continue
         
-        # If all encodings failed, raise the last error
         raise ValueError(f"Could not read CSV file. Last error: {str(last_error)}")
     
     def save_csv(self, data: List[Dict[str, Any]], output_path: Path) -> None:
@@ -178,7 +200,8 @@ class CSVConverter(BaseConverter):
         
         report = "CSV Reader Report:\n"
         report += "-" * 60 + "\n"
+        report += f"Separator detected: {repr(self.smart_reader.detected_separator)}\n"
         report += f"Records read: {self.smart_reader.records_read}\n"
-        report += f"Empty records skipped: {self.smart_reader.records_skipped}\n"
+        report += f"Records skipped: {self.smart_reader.records_skipped}\n"
         
         return report
