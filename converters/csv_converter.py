@@ -1,4 +1,4 @@
-"""Advanced CSV file converter with intelligent header detection for complex files"""
+"""Advanced CSV file converter - FINAL VERSION with proper header detection"""
 
 import pandas as pd
 from pathlib import Path
@@ -7,7 +7,7 @@ from converters.base_converter import BaseConverter
 
 
 class SmartCSVReader:
-    """Intelligently reads CSV files with complex structures"""
+    """Intelligently reads CSV files with proper header detection"""
     
     def __init__(self):
         self.detected_header_row = 0
@@ -16,11 +16,9 @@ class SmartCSVReader:
         self.records_skipped = 0
     
     def detect_separator_and_read(self, file_path: Path, encoding: str = 'utf-8'):
-        """
-        Try multiple separators and return best result
-        """
+        """Try multiple separators and return best result"""
         
-        separators_to_try = ['\t', ',', ';', '|', '  ']  # Tab first, then others
+        separators_to_try = ['\t', ',', ';', '|']
         best_result = None
         best_columns = 0
         best_separator = None
@@ -30,7 +28,6 @@ class SmartCSVReader:
                 df_test = pd.read_csv(file_path, sep=sep, encoding=encoding, nrows=5)
                 num_cols = len(df_test.columns)
                 
-                # Check if this separator gives us reasonable columns
                 if num_cols > best_columns:
                     best_columns = num_cols
                     best_separator = sep
@@ -38,45 +35,38 @@ class SmartCSVReader:
                 print(f"[CSV Reader] Separator '{repr(sep)}': {num_cols} columns")
                 
             except Exception as e:
-                print(f"[CSV Reader] Separator '{repr(sep)}' failed: {e}")
                 continue
         
         if best_separator is None:
             raise ValueError("Could not determine file separator")
         
         self.detected_separator = best_separator
-        print(f"[CSV Reader] Using separator: {repr(best_separator)}")
+        print(f"[CSV Reader] Using separator: {repr(best_separator)}\n")
         
         return best_separator
     
     def read_csv_smart(self, file_path: Path, encoding: str = 'utf-8') -> List[Dict[str, Any]]:
-        """
-        Intelligently read CSV file with complex structure
-        """
+        """Intelligently read CSV file"""
         
-        # Detect best separator
         separator = self.detect_separator_and_read(file_path, encoding)
         
         try:
-            # Read with best separator
+            # Read with header in first row
             df = pd.read_csv(
                 file_path,
                 sep=separator,
                 encoding=encoding,
-                dtype=str
+                dtype=str,
+                header=0  # CRITICAL: First row is header
             )
             
-            print(f"\n[CSV Reader] Initial read:")
+            print(f"[CSV Reader] Initial read:")
             print(f"  Rows: {len(df)}")
             print(f"  Columns: {len(df.columns)}")
-            print(f"  Column names: {list(df.columns)}")
+            print(f"  Column names: {list(df.columns)}\n")
             
-            # Clean column names - remove extra spaces and duplicates
-            original_cols = list(df.columns)
+            # Clean column names
             df.columns = [str(col).strip() for col in df.columns]
-            
-            print(f"\n[CSV Reader] After column cleanup:")
-            print(f"  Column names: {list(df.columns)}")
             
             # Remove completely empty rows
             df = df.dropna(how='all')
@@ -104,7 +94,7 @@ class SmartCSVReader:
             df = df[cols_to_keep]
             
             print(f"[CSV Reader] After removing empty columns: {len(df.columns)} columns")
-            print(f"[CSV Reader] Final columns: {list(df.columns)}")
+            print(f"[CSV Reader] Final columns: {list(df.columns)}\n")
             
             # Convert to list of dicts
             records = df.to_dict('records')
@@ -117,7 +107,6 @@ class SmartCSVReader:
                 has_data = False
                 
                 for key, value in record.items():
-                    # Skip completely empty columns
                     if pd.isna(value) or value is None or value == '':
                         continue
                     
@@ -136,9 +125,9 @@ class SmartCSVReader:
             self.records_read = len(cleaned_records)
             self.records_skipped = len(records) - len(cleaned_records)
             
-            print(f"\n[CSV Reader] Final result:")
+            print(f"[CSV Reader] Final result:")
             print(f"  Records with data: {self.records_read}")
-            print(f"  Empty records removed: {self.records_skipped}")
+            print(f"  Empty records removed: {self.records_skipped}\n")
             
             return cleaned_records
             
@@ -148,18 +137,14 @@ class SmartCSVReader:
 
 
 class CSVConverter(BaseConverter):
-    """Advanced converter for CSV files with intelligent parsing"""
+    """Advanced converter for CSV files"""
     
     def __init__(self):
         super().__init__()
         self.smart_reader = SmartCSVReader()
     
     def read(self, file_path):
-        """
-        Read data from CSV file using intelligent separator detection
-        
-        Automatically detects tab, comma, semicolon, pipe, or space separators
-        """
+        """Read data from CSV file"""
         
         file_path = Path(file_path)
         
@@ -172,7 +157,7 @@ class CSVConverter(BaseConverter):
         last_error = None
         for encoding in encodings:
             try:
-                print(f"\n[CSV Converter] Trying encoding: {encoding}")
+                print(f"[CSV Converter] Trying encoding: {encoding}")
                 self.data = self.smart_reader.read_csv_smart(file_path, encoding=encoding)
                 print(f"[CSV Converter] Successfully read with encoding: {encoding}")
                 print(f"[CSV Converter] Total records: {len(self.data)}\n")
