@@ -1,6 +1,7 @@
-"""Intelligent data processor for normalizing and validating registry data"""
+"""Advanced intelligent data processor with smart address parsing"""
 
 import pandas as pd
+import re
 from difflib import SequenceMatcher
 from config import (
     OUTPUT_COLUMNS,
@@ -15,20 +16,20 @@ from config import (
 )
 
 
-class ColumnMatcher:
-    """Intelligent column name matcher using fuzzy matching"""
+class AdvancedColumnMatcher:
+    """Advanced intelligent column name matcher with fuzzy matching and smart field extraction"""
     
     FIELD_PATTERNS = {
-        'register_name': ['registername', 'register_name', 'name', 'id', 'description', 'desc'],
-        'display_name': ['displayname', 'display_name', 'label', 'description', 'desc', 'display'],
-        'function_code': ['functioncode', 'function_code', 'function', 'code', 'fc', 'func'],
-        'register_type': ['registertype', 'register_type', 'type', 'regtype', 'reg_type'],
-        'address': ['address', 'addr', 'offset', 'register', 'reg_addr', 'modbus_address'],
-        'data_type': ['datatype', 'data_type', 'dtype', 'format', 'value_type'],
-        'register_count': ['registercount', 'register_count', 'count', 'size', 'length', 'qty'],
-        'scale_factor': ['scalefactor', 'scale_factor', 'scale', 'multiplier', 'factor'],
-        'unit': ['unit', 'units', 'uom', 'measurement'],
-        'access': ['access', 'permission', 'permissions', 'accesstype', 'access_type', 'mode'],
+        'register_name': ['registername', 'register_name', 'name', 'id', 'description', 'desc', 'registerlabel', 'register_label', 'label'],
+        'display_name': ['displayname', 'display_name', 'label', 'description', 'desc', 'display', 'registerlabel'],
+        'function_code': ['functioncode', 'function_code', 'function', 'code', 'fc', 'func', 'modbusfunction'],
+        'register_type': ['registertype', 'register_type', 'type', 'regtype', 'reg_type', 'modbustype'],
+        'address': ['address', 'addr', 'offset', 'register', 'reg_addr', 'modbus_address', 'modbusaddr', 'modbus_addr'],
+        'data_type': ['datatype', 'data_type', 'dtype', 'format', 'value_type', 'valuetype'],
+        'register_count': ['registercount', 'register_count', 'count', 'size', 'length', 'qty', 'quantity'],
+        'scale_factor': ['scalefactor', 'scale_factor', 'scale', 'multiplier', 'factor', 'scaling'],
+        'unit': ['unit', 'units', 'uom', 'measurement', 'measure'],
+        'access': ['access', 'permission', 'permissions', 'accesstype', 'access_type', 'mode', 'accessmode'],
         'polling_ms': ['polling_ms', 'polling', 'pollinterval', 'poll_interval', 'interval', 'frequency'],
         'enabled': ['enabled', 'active', 'status', 'disabled', 'enable']
     }
@@ -91,15 +92,88 @@ class ColumnMatcher:
         return value
 
 
-class DataProcessor:
-    """Process and normalize registry data"""
+class SmartAddressParser:
+    """Smart parser for extracting function code and address from combined address values"""
+    
+    # Function code ranges
+    FUNCTION_CODE_RANGES = {
+        1: (0, 9999),           # Coil
+        2: (10000, 19999),      # Discrete Input
+        3: (30000, 39999),      # Input Register
+        4: (40000, 49999),      # Holding Register
+    }
+    
+    def __init__(self):
+        self.extracted_function_codes = {}
+        self.extracted_addresses = {}
+    
+    def parse_address(self, address_value, register_name=""):
+        """
+        Smart parse address that may contain encoded function code
+        Examples:
+        - 414201 -> function_code=4, address=14201
+        - 314500 -> function_code=3, address=14500
+        - 100 -> function_code=3 (default), address=100
+        """
+        
+        if not address_value:
+            return None, None
+        
+        try:
+            addr_str = str(address_value).strip()
+            addr_int = int(float(addr_str))
+        except:
+            return None, None
+        
+        extracted_fc = None
+        extracted_addr = None
+        
+        # Check if first digit is a function code
+        addr_str_padded = str(addr_int).zfill(6)
+        first_digit = int(addr_str_padded[0])
+        
+        if first_digit in self.FUNCTION_CODE_RANGES:
+            potential_addr = addr_int - (first_digit * 10000)
+            
+            # Verify if this makes sense (address should be 0-9999 typically)
+            if 0 <= potential_addr <= 65535:
+                extracted_fc = first_digit
+                extracted_addr = potential_addr
+        
+        # If no extraction, use whole address
+        if extracted_addr is None:
+            extracted_addr = addr_int
+            extracted_fc = self._determine_function_code_by_address(addr_int)
+        
+        return extracted_fc, extracted_addr
+    
+    def _determine_function_code_by_address(self, address):
+        """Determine function code based on address range"""
+        
+        for fc, (min_addr, max_addr) in self.FUNCTION_CODE_RANGES.items():
+            if min_addr <= address <= max_addr:
+                return fc
+        
+        return 3  # Default to Input Register
+    
+    def get_parsing_report(self):
+        """Get report of parsed addresses"""
+        return {
+            'extracted_function_codes': self.extracted_function_codes,
+            'extracted_addresses': self.extracted_addresses
+        }
+
+
+class AdvancedDataProcessor:
+    """Advanced process and normalize registry data with smart extraction"""
     
     def __init__(self):
         self.warnings = []
-        self.column_matcher = ColumnMatcher()
+        self.column_matcher = AdvancedColumnMatcher()
+        self.address_parser = SmartAddressParser()
     
     def process(self, raw_data):
-        """Process raw data to unified format"""
+        """Process raw data to unified format with smart extraction"""
         
         if not raw_data:
             return []
@@ -123,27 +197,46 @@ class DataProcessor:
         return processed_data
     
     def _normalize_record(self, record, idx):
-        """Normalize a single record to unified format"""
+        """Normalize a single record to unified format with smart parsing"""
         
+        # Get register name (try multiple sources)
         register_name = self.column_matcher.get_value(record, 'register_name')
+        
+        # If register_name not found, try to extract from display_name
+        if not register_name:
+            register_name = self.column_matcher.get_value(record, 'display_name')
+        
         if not register_name:
             return None
         
+        # Get display name
         display_name = self.column_matcher.get_value(record, 'display_name')
         if not display_name:
-            display_name = register_name
+            # Use register_name as display_name, or extract cleaner version
+            display_name = self._clean_display_name(register_name)
         
+        # Get address and extract function code if embedded
+        raw_address = self.column_matcher.get_value(record, 'address')
+        extracted_fc, extracted_addr = self.address_parser.parse_address(raw_address, register_name)
+        
+        # Get function code (prefer extracted, then from data, then use extracted or default)
         function_code = self.column_matcher.get_value(record, 'function_code')
-        function_code = self._normalize_function_code(function_code)
+        if function_code:
+            function_code = self._normalize_function_code(function_code)
+        elif extracted_fc:
+            function_code = extracted_fc
+        else:
+            function_code = 3
         
+        # Get register type based on function code
         register_type = self.column_matcher.get_value(record, 'register_type')
-        register_type = self._normalize_register_type(register_type)
+        if not register_type:
+            register_type = self._get_register_type_from_function_code(function_code)
+        else:
+            register_type = self._normalize_register_type(register_type)
         
-        address = self.column_matcher.get_value(record, 'address')
-        try:
-            address = int(address) if address else 0
-        except:
-            address = 0
+        # Use extracted address or default to 0
+        address = extracted_addr if extracted_addr is not None else 0
         
         data_type = self.column_matcher.get_value(record, 'data_type')
         data_type = self._normalize_data_type(data_type)
@@ -191,6 +284,25 @@ class DataProcessor:
             'Enabled': enabled
         }
     
+    def _clean_display_name(self, register_name):
+        """Clean and format register name for display"""
+        name = str(register_name).strip()
+        # Replace underscores with spaces
+        name = name.replace('_', ' ')
+        # Capitalize first letter of each word
+        name = ' '.join(word.capitalize() for word in name.split())
+        return name
+    
+    def _get_register_type_from_function_code(self, function_code):
+        """Get register type based on Modbus function code"""
+        fc_to_type = {
+            1: 'Coil',
+            2: 'Discrete Input',
+            3: 'Input Register',
+            4: 'Holding Register',
+        }
+        return fc_to_type.get(function_code, 'Holding Register')
+    
     def _normalize_function_code(self, value):
         """Normalize function code to standard value"""
         
@@ -205,7 +317,7 @@ class DataProcessor:
         
         try:
             code = int(value)
-            if code in FUNCTION_CODE_MAP.values():
+            if code in [1, 2, 3, 4, 16, 23]:
                 return code
         except:
             pass
@@ -282,6 +394,11 @@ class DataProcessor:
             
             if record.get('Polling_ms', 0) <= 0:
                 validation_results['warnings'].append(f"Row {idx + 1}: Polling_ms should be positive")
+            
+            # Validate function code
+            fc = record.get('FunctionCode')
+            if fc not in [1, 2, 3, 4, 16, 23]:
+                validation_results['warnings'].append(f"Row {idx + 1}: Invalid Function Code {fc}")
         
         return validation_results
     
@@ -305,3 +422,7 @@ class DataProcessor:
                 report += f"  - {field}\n"
         
         return report
+
+
+# Keep backward compatibility
+DataProcessor = AdvancedDataProcessor
