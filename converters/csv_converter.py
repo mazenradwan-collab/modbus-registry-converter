@@ -1,4 +1,4 @@
-"""Advanced CSV file converter with intelligent header detection"""
+"""Advanced CSV file converter with intelligent header detection for tab-separated files"""
 
 import pandas as pd
 from pathlib import Path
@@ -7,101 +7,100 @@ from converters.base_converter import BaseConverter
 
 
 class SmartCSVReader:
-    """Intelligently reads CSV files with complex structures"""
+    """Intelligently reads CSV files with complex structures, including tab-separated"""
     
     def __init__(self):
-        self.detected_header_row = None
-        self.detected_data_start_row = None
-        self.skipped_rows_info = []
+        self.detected_header_row = 0
+        self.detected_data_start_row = 1
+        self.separator = ','
+        self.records_read = 0
+        self.records_skipped = 0
     
-    def detect_header_row(self, file_path: Path) -> int:
-        """
-        Detect which row contains the actual headers
-        """
+    def detect_separator(self, file_path: Path) -> str:
+        """Detect if file is comma or tab separated"""
         
         try:
-            # Read all rows without header
-            df_raw = pd.read_csv(file_path, header=None)
-            
-            # Look for row that contains common field names
-            common_fields = [
-                'registername', 'name', 'label', 'address', 'addr',
-                'functioncode', 'registertype', 'datatype', 'access',
-                'modbusaddr', 'registerlabel', 'format', 'requesttype',
-                'unit', 'polling', 'enabled', 'managerlabel', 'modulelabel'
-            ]
-            
-            for idx, row in df_raw.iterrows():
-                # Convert row to lowercase strings
-                row_values = [str(val).lower().strip() for val in row if pd.notna(val)]
+            with open(file_path, 'r', encoding='utf-8') as f:
+                first_line = f.readline()
                 
-                # Count how many common fields are in this row
-                matching_fields = sum(1 for val in row_values if any(field in val for field in common_fields))
+                # Count separators
+                comma_count = first_line.count(',')
+                tab_count = first_line.count('\t')
                 
-                # If we find a row with multiple matching fields, it's likely the header
-                if matching_fields >= 3:
-                    self.detected_header_row = idx
-                    return idx
-            
-            # If no header detected, assume first non-empty row
-            for idx, row in df_raw.iterrows():
-                if row.notna().sum() > 2:  # At least 3 non-empty cells
-                    self.detected_header_row = idx
-                    return idx
-            
-            self.detected_header_row = 0
-            return 0
-            
-        except Exception as e:
-            print(f"Error detecting header: {e}")
-            self.detected_header_row = 0
-            return 0
+                if tab_count > comma_count:
+                    return '\t'
+                return ','
+        except:
+            return ','
     
     def read_csv_smart(self, file_path: Path, encoding: str = 'utf-8') -> List[Dict[str, Any]]:
         """
-        Intelligently read CSV file with complex structure
+        Intelligently read CSV/TSV file with complex structure
         """
         
-        header_row = self.detect_header_row(file_path)
+        separator = self.detect_separator(file_path)
         
         try:
-            # Read CSV with detected header row
+            # Read with detected separator
             df = pd.read_csv(
-                file_path, 
-                header=header_row, 
-                skiprows=range(0, header_row),
-                encoding=encoding
+                file_path,
+                sep=separator,
+                encoding=encoding,
+                dtype=str  # Read everything as string first
             )
             
-            # Clean column names - remove extra spaces and empty names
+            # Clean column names - remove extra spaces
             df.columns = [str(col).strip() for col in df.columns]
             
-            # Remove completely empty columns
-            df = df.dropna(axis=1, how='all')
+            print(f"[CSV Smart Reader] Detected separator: {'TAB' if separator == '\t' else 'COMMA'}")
+            print(f"[CSV Smart Reader] Original columns: {list(df.columns)}")
+            print(f"[CSV Smart Reader] Original rows: {len(df)}")
             
             # Remove completely empty rows
             df = df.dropna(how='all')
             
-            # Remove rows where all meaningful columns are empty
-            meaningful_cols = [col for col in df.columns if col and not str(col).isspace()]
-            if meaningful_cols:
-                df = df.dropna(subset=meaningful_cols, how='all')
+            # Remove rows where ALL columns are empty/whitespace
+            df_clean = df.copy()
+            for col in df_clean.columns:
+                df_clean[col] = df_clean[col].fillna('').astype(str).str.strip()
+            
+            # Keep only rows that have at least some data
+            df = df[df_clean.replace('', pd.NA).notna().any(axis=1)]
+            
+            print(f"[CSV Smart Reader] Rows after cleaning empty: {len(df)}")
+            
+            # Remove completely empty columns (all NaN or all empty strings)
+            df = df.dropna(axis=1, how='all')
+            
+            # Also remove columns that are completely empty strings
+            for col in df.columns:
+                if df[col].astype(str).str.strip().eq('').all():
+                    df = df.drop(columns=[col])
+            
+            print(f"[CSV Smart Reader] Columns after cleaning empty: {list(df.columns)}")
+            print(f"[CSV Smart Reader] Final rows: {len(df)}")
             
             # Convert to list of dicts
             records = df.to_dict('records')
             
             # Clean records - remove empty entries and standardize
             cleaned_records = []
+            skipped = 0
+            
             for record in records:
-                # Remove None and NaN values, keep empty strings as None
                 cleaned_record = {}
                 has_data = False
                 
                 for key, value in record.items():
                     if pd.isna(value) or value is None:
                         cleaned_record[key] = None
-                    elif isinstance(value, str) and not value.strip():
-                        cleaned_record[key] = None
+                    elif isinstance(value, str):
+                        cleaned_val = value.strip()
+                        if cleaned_val:
+                            cleaned_record[key] = cleaned_val
+                            has_data = True
+                        else:
+                            cleaned_record[key] = None
                     else:
                         cleaned_record[key] = value
                         has_data = True
@@ -109,10 +108,14 @@ class SmartCSVReader:
                 # Only add record if it has at least one non-empty field
                 if has_data:
                     cleaned_records.append(cleaned_record)
+                else:
+                    skipped += 1
             
-            print(f"[CSV Smart Reader] Detected header at row: {self.detected_header_row}")
-            print(f"[CSV Smart Reader] Read {len(cleaned_records)} records")
-            print(f"[CSV Smart Reader] Columns: {list(df.columns)}")
+            self.records_read = len(cleaned_records)
+            self.records_skipped = skipped
+            
+            print(f"[CSV Smart Reader] Records with data: {self.records_read}")
+            print(f"[CSV Smart Reader] Empty records skipped: {self.records_skipped}")
             
             return cleaned_records
             
@@ -132,7 +135,8 @@ class CSVConverter(BaseConverter):
         """
         Read data from CSV file using intelligent header detection
         
-        Tries multiple encodings and uses smart header row detection
+        Supports both comma and tab-separated files
+        Automatically detects and skips empty rows/columns
         """
         
         file_path = Path(file_path)
@@ -148,6 +152,7 @@ class CSVConverter(BaseConverter):
             try:
                 self.data = self.smart_reader.read_csv_smart(file_path, encoding=encoding)
                 print(f"[CSV Converter] Successfully read with encoding: {encoding}")
+                print(f"[CSV Converter] Total records loaded: {len(self.data)}")
                 return self.data
             except Exception as e:
                 last_error = e
@@ -173,7 +178,7 @@ class CSVConverter(BaseConverter):
         
         report = "CSV Reader Report:\n"
         report += "-" * 60 + "\n"
-        report += f"Header row detected at: Row {self.smart_reader.detected_header_row}\n"
-        report += f"Records read: {self.data.__len__() if self.data else 0}\n"
+        report += f"Records read: {self.smart_reader.records_read}\n"
+        report += f"Empty records skipped: {self.smart_reader.records_skipped}\n"
         
         return report
