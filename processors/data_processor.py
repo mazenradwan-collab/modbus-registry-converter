@@ -1,4 +1,4 @@
-"""Advanced intelligent data processor with smart address parsing - Fixed version"""
+"""Advanced intelligent data processor with flexible field detection"""
 
 import pandas as pd
 import re
@@ -16,70 +16,77 @@ from config import (
 )
 
 
-class AdvancedColumnMatcher:
-    """Advanced intelligent column name matcher"""
-    
-    FIELD_PATTERNS = {
-        'register_name': ['registername', 'register_name', 'registerlabel', 'name', 'id', 'description', 'desc', 'label'],
-        'display_name': ['displayname', 'display_name', 'name', 'label', 'description', 'registerlabel'],
-        'function_code': ['functioncode', 'function_code', 'requesttype', 'request_type', 'function', 'code', 'fc'],
-        'register_type': ['registertype', 'register_type', 'type', 'regtype'],
-        'address': ['address', 'modbusaddr', 'modbus_addr', 'addr', 'offset', 'register'],
-        'data_type': ['datatype', 'data_type', 'format', 'dtype'],
-        'register_count': ['registercount', 'register_count', 'count', 'numberofregisters', 'size'],
-        'scale_factor': ['scalefactor', 'scale_factor', 'scale', 'mask', 'multiplier'],
-        'unit': ['unit', 'units', 'uom'],
-        'access': ['access', 'requesttype', 'request_type', 'permission', 'mode'],
-        'polling_ms': ['polling_ms', 'polling', 'interval'],
-        'enabled': ['enabled', 'active', 'status']
-    }
+class FlexibleColumnMatcher:
+    """Flexible column matcher that finds any field that could be a name"""
     
     def __init__(self):
         self.column_map = {}
-        self.confidence_scores = {}
         self.all_columns = []
+        self.name_columns = []  # Columns that look like names
     
     def match_columns(self, dataframe):
-        """Match DataFrame columns to standard fields"""
+        """Match columns and find name fields"""
         
         self.all_columns = list(dataframe.columns)
-        df_columns = [str(col).lower().strip() for col in self.all_columns]
-        self.column_map = {}
-        self.confidence_scores = {}
+        df_columns_lower = [str(col).lower().strip() for col in self.all_columns]
         
-        for field, patterns in self.FIELD_PATTERNS.items():
-            best_match = None
-            best_score = 0
-            
-            for i, df_col in enumerate(df_columns):
-                if not df_col or df_col.isspace():
-                    continue
-                    
-                if df_col in patterns:
-                    best_match = self.all_columns[i]
-                    best_score = 1.0
+        print(f"\n[ColumnMatcher] Available columns: {self.all_columns}")
+        
+        # Find columns that look like names
+        name_keywords = ['name', 'label', 'registerlabel', 'register_label', 'description', 'id']
+        self.name_columns = []
+        
+        for i, col_lower in enumerate(df_columns_lower):
+            for keyword in name_keywords:
+                if keyword in col_lower or col_lower in keyword:
+                    self.name_columns.append(self.all_columns[i])
                     break
-                
-                for pattern in patterns:
-                    score = self._similarity_score(df_col, pattern)
-                    if score > best_score:
-                        best_score = score
-                        best_match = self.all_columns[i]
-            
-            if best_match and best_score > 0.5:
-                self.column_map[field] = best_match
-                self.confidence_scores[field] = best_score
         
-        return self.column_map, self.confidence_scores
+        print(f"[ColumnMatcher] Name columns found: {self.name_columns}")
+        
+        # Map standard fields
+        field_patterns = {
+            'address': ['address', 'modbusaddr', 'modbus_addr', 'addr'],
+            'data_type': ['datatype', 'data_type', 'format', 'dtype'],
+            'access': ['access', 'requesttype', 'request_type'],
+            'register_count': ['registercount', 'register_count', 'count'],
+            'scale_factor': ['scalefactor', 'scale_factor', 'scale', 'mask'],
+            'unit': ['unit', 'units'],
+            'polling_ms': ['polling', 'polling_ms'],
+            'enabled': ['enabled', 'active'],
+        }
+        
+        self.column_map = {}
+        
+        for field, patterns in field_patterns.items():
+            for i, col_lower in enumerate(df_columns_lower):
+                for pattern in patterns:
+                    if pattern in col_lower or col_lower in pattern:
+                        self.column_map[field] = self.all_columns[i]
+                        break
+                if field in self.column_map:
+                    break
+        
+        print(f"[ColumnMatcher] Mapped fields: {self.column_map}")
+        
+        return self.column_map
     
-    def _similarity_score(self, str1, str2):
-        """Calculate similarity between strings"""
-        str1_clean = str1.replace('_', '').replace(' ', '')
-        str2_clean = str2.replace('_', '').replace(' ', '')
-        return SequenceMatcher(None, str1_clean, str2_clean).ratio()
+    def get_name_from_record(self, record):
+        """Get name from record using any name column"""
+        
+        # Try each name column
+        for name_col in self.name_columns:
+            value = record.get(name_col)
+            if value is not None:
+                val_str = str(value).strip()
+                if val_str and val_str.lower() not in ['nan', 'none', '']:
+                    return val_str
+        
+        return None
     
     def get_value(self, record, field):
-        """Get value from record using mapped column"""
+        """Get value from record"""
+        
         if field not in self.column_map:
             return None
         
@@ -93,20 +100,16 @@ class AdvancedColumnMatcher:
 
 
 class SmartAddressParser:
-    """Parse Modbus addresses with function code extraction"""
+    """Parse Modbus addresses"""
     
     FUNCTION_CODE_RANGES = {
-        1: (0, 9999),           # Coil
-        2: (10000, 19999),      # Discrete Input
-        3: (30000, 39999),      # Input Register
-        4: (40000, 49999),      # Holding Register
+        1: (0, 9999),
+        2: (10000, 19999),
+        3: (30000, 39999),
+        4: (40000, 49999),
     }
     
-    def __init__(self):
-        self.extracted_function_codes = {}
-        self.extracted_addresses = {}
-    
-    def parse_address(self, address_value, register_name=""):
+    def parse_address(self, address_value):
         """Parse address and extract function code if embedded"""
         
         if address_value is None:
@@ -124,7 +127,6 @@ class SmartAddressParser:
         extracted_fc = None
         extracted_addr = None
         
-        # Check if first digit is function code
         addr_str_num = str(addr_int)
         
         if len(addr_str_num) >= 5:
@@ -156,13 +158,13 @@ class AdvancedDataProcessor:
     
     def __init__(self):
         self.warnings = []
-        self.column_matcher = AdvancedColumnMatcher()
+        self.column_matcher = FlexibleColumnMatcher()
         self.address_parser = SmartAddressParser()
         self.skipped_rows = 0
         self.processed_rows = 0
     
     def process(self, raw_data):
-        """Process raw data to unified format"""
+        """Process raw data"""
         
         if not raw_data:
             return []
@@ -180,10 +182,8 @@ class AdvancedDataProcessor:
         
         self.column_matcher.match_columns(pd.DataFrame(raw_data_clean))
         
-        print(f"\n[DataProcessor] Column Mapping:")
-        for field, col in self.column_matcher.column_map.items():
-            score = self.column_matcher.confidence_scores.get(field, 0)
-            print(f"  {field:20s} <- {col:20s} ({int(score*100)}%)")
+        print(f"\n[DataProcessor] Starting processing...")
+        print(f"[DataProcessor] Total records to process: {len(raw_data_clean)}")
         
         processed_data = []
         
@@ -199,18 +199,18 @@ class AdvancedDataProcessor:
                 self.warnings.append(f"Row {idx + 1}: {str(e)}")
                 self.skipped_rows += 1
         
-        print(f"\n[DataProcessor] Processing Summary:")
-        print(f"  Total rows: {len(raw_data_clean)}")
+        print(f"\n[DataProcessor] Processing completed:")
         print(f"  Processed: {self.processed_rows}")
         print(f"  Skipped: {self.skipped_rows}")
+        print(f"  Total: {len(raw_data_clean)}\n")
         
         return processed_data
     
     def _normalize_record(self, record, idx):
         """Normalize a single record"""
         
-        # Get register name - CRITICAL: accept ANY non-empty value
-        register_name = self.column_matcher.get_value(record, 'register_name')
+        # Get name using flexible matcher
+        register_name = self.column_matcher.get_name_from_record(record)
         
         if not register_name:
             return None
@@ -219,30 +219,17 @@ class AdvancedDataProcessor:
         if not register_name or register_name.lower() in ['nan', '', 'none']:
             return None
         
-        # Get display name
-        display_name = self.column_matcher.get_value(record, 'display_name')
-        if not display_name:
-            display_name = self._clean_display_name(register_name)
+        display_name = self._clean_display_name(register_name)
         
         # Get address
         raw_address = self.column_matcher.get_value(record, 'address')
-        extracted_fc, extracted_addr = self.address_parser.parse_address(raw_address, register_name)
+        extracted_fc, extracted_addr = self.address_parser.parse_address(raw_address)
         
         # Get function code
-        function_code = self.column_matcher.get_value(record, 'function_code')
-        if function_code:
-            function_code = self._normalize_function_code(function_code)
-        elif extracted_fc:
-            function_code = extracted_fc
-        else:
-            function_code = 4
+        function_code = extracted_fc if extracted_fc else 4
         
         # Get register type
-        register_type = self.column_matcher.get_value(record, 'register_type')
-        if not register_type:
-            register_type = self._get_register_type_from_function_code(function_code)
-        else:
-            register_type = self._normalize_register_type(register_type)
+        register_type = self._get_register_type_from_function_code(function_code)
         
         # Use extracted address
         address = extracted_addr if extracted_addr is not None else 0
@@ -318,42 +305,6 @@ class AdvancedDataProcessor:
         }
         return fc_to_type.get(function_code, 'Holding Register')
     
-    def _normalize_function_code(self, value):
-        """Normalize function code"""
-        if not value:
-            return 4
-        
-        value_str = str(value).lower().strip()
-        
-        if 'rw' in value_str or 'read-write' in value_str:
-            return 4
-        elif 'r' in value_str:
-            return 3
-        elif 'w' in value_str:
-            return 16
-        
-        try:
-            code = int(value)
-            if code in [1, 2, 3, 4, 16, 23]:
-                return code
-        except:
-            pass
-        
-        return 4
-    
-    def _normalize_register_type(self, value):
-        """Normalize register type"""
-        if not value:
-            return 'Holding Register'
-        
-        value_str = str(value).lower().strip()
-        
-        for key, reg_type in REGISTER_TYPE_MAP.items():
-            if key in value_str:
-                return reg_type
-        
-        return 'Holding Register'
-    
     def _normalize_data_type(self, value):
         """Normalize data type"""
         if not value:
@@ -412,37 +363,7 @@ class AdvancedDataProcessor:
             'skipped_rows': self.skipped_rows
         }
         
-        for idx, record in enumerate(data):
-            if not record.get('RegisterName'):
-                validation_results['errors'].append(f"Row {idx + 1}: Missing RegisterName")
-                validation_results['is_valid'] = False
-        
         return validation_results
-    
-    def get_column_mapping_report(self):
-        """Get column mapping report"""
-        
-        report = "Column Mapping Report:\n"
-        report += "-" * 60 + "\n"
-        
-        for field, column in self.column_matcher.column_map.items():
-            confidence = self.column_matcher.confidence_scores.get(field, 0)
-            confidence_pct = int(confidence * 100)
-            report += f"{field:20s} -> {column:30s} ({confidence_pct}%)\n"
-        
-        unmapped = [field for field in self.column_matcher.FIELD_PATTERNS.keys() 
-                   if field not in self.column_matcher.column_map]
-        
-        if unmapped:
-            report += "\nUnmapped fields (using defaults):\n"
-            for field in unmapped:
-                report += f"  - {field}\n"
-        
-        report += f"\nProcessing Summary:\n"
-        report += f"  Total rows processed: {self.processed_rows}\n"
-        report += f"  Total rows skipped: {self.skipped_rows}\n"
-        
-        return report
 
 
 DataProcessor = AdvancedDataProcessor
