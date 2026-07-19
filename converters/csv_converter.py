@@ -1,4 +1,4 @@
-"""Advanced CSV file converter - FINAL VERSION with proper header detection"""
+"""Advanced CSV file converter - DEBUG VERSION with explicit handling"""
 
 import pandas as pd
 from pathlib import Path
@@ -25,33 +25,43 @@ class SmartCSVReader:
         
         for sep in separators_to_try:
             try:
-                df_test = pd.read_csv(file_path, sep=sep, encoding=encoding, nrows=5)
+                # Read first 10 lines to test separator
+                df_test = pd.read_csv(
+                    file_path, 
+                    sep=sep, 
+                    encoding=encoding, 
+                    nrows=10,
+                    header=0
+                )
                 num_cols = len(df_test.columns)
+                
+                print(f"[CSV Reader] Testing separator {repr(sep)}: {num_cols} columns")
+                print(f"[CSV Reader]   Column names: {list(df_test.columns)[:5]}...")
                 
                 if num_cols > best_columns:
                     best_columns = num_cols
                     best_separator = sep
-                    
-                print(f"[CSV Reader] Separator '{repr(sep)}': {num_cols} columns")
                 
             except Exception as e:
+                print(f"[CSV Reader] Separator {repr(sep)} failed: {type(e).__name__}")
                 continue
         
         if best_separator is None:
             raise ValueError("Could not determine file separator")
         
         self.detected_separator = best_separator
-        print(f"[CSV Reader] Using separator: {repr(best_separator)}\n")
+        print(f"\n[CSV Reader] SELECTED separator: {repr(best_separator)} ({best_columns} columns)\n")
         
         return best_separator
     
     def read_csv_smart(self, file_path: Path, encoding: str = 'utf-8') -> List[Dict[str, Any]]:
-        """Intelligently read CSV file"""
+        """Intelligently read CSV file with proper header detection"""
         
+        # Detect best separator
         separator = self.detect_separator_and_read(file_path, encoding)
         
         try:
-            # Read with header in first row
+            # Read with detected separator and first row as header
             df = pd.read_csv(
                 file_path,
                 sep=separator,
@@ -60,10 +70,16 @@ class SmartCSVReader:
                 header=0  # CRITICAL: First row is header
             )
             
-            print(f"[CSV Reader] Initial read:")
-            print(f"  Rows: {len(df)}")
-            print(f"  Columns: {len(df.columns)}")
-            print(f"  Column names: {list(df.columns)}\n")
+            print(f"[CSV Reader] Successfully read with header=0:")
+            print(f"  Total rows: {len(df)}")
+            print(f"  Total columns: {len(df.columns)}")
+            print(f"  Actual column names: {list(df.columns)}\n")
+            
+            # Verify columns are real (not Unnamed)
+            unnamed_count = sum(1 for col in df.columns if 'Unnamed' in str(col))
+            if unnamed_count > 0:
+                print(f"[CSV Reader] WARNING: Found {unnamed_count} 'Unnamed' columns!")
+                print(f"[CSV Reader] This means the separator might be wrong or header parsing failed\n")
             
             # Clean column names
             df.columns = [str(col).strip() for col in df.columns]
@@ -94,7 +110,7 @@ class SmartCSVReader:
             df = df[cols_to_keep]
             
             print(f"[CSV Reader] After removing empty columns: {len(df.columns)} columns")
-            print(f"[CSV Reader] Final columns: {list(df.columns)}\n")
+            print(f"[CSV Reader] Final column names: {list(df.columns)}\n")
             
             # Convert to list of dicts
             records = df.to_dict('records')
@@ -132,7 +148,9 @@ class SmartCSVReader:
             return cleaned_records
             
         except Exception as e:
-            print(f"Error reading CSV: {e}")
+            print(f"[CSV Reader] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             raise
 
 
@@ -164,7 +182,7 @@ class CSVConverter(BaseConverter):
                 return self.data
             except Exception as e:
                 last_error = e
-                print(f"[CSV Converter] Failed with {encoding}: {e}")
+                print(f"[CSV Converter] Failed with {encoding}\n")
                 continue
         
         raise ValueError(f"Could not read CSV file. Last error: {str(last_error)}")
