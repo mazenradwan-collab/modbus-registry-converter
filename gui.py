@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GUI for Modbus Registry Converter using tkinter"""
+"""GUI for Modbus Registry Converter using tkinter with advanced filtering"""
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -11,17 +11,18 @@ from converters.csv_converter import CSVConverter
 from converters.excel_converter import ExcelConverter
 from converters.pdf_converter import PDFConverter
 from processors.data_processor import DataProcessor
+from processors.registry_filter import RegistryFilter, get_filter_presets
 from config import OUTPUT_DIR
 
 
 class ModbusConverterGUI:
-    """GUI Application for Modbus Registry Converter"""
+    """GUI Application for Modbus Registry Converter with Filter"""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Modbus Registry Converter")
-        self.root.geometry("700x600")
-        self.root.resizable(False, False)
+        self.root.title("Modbus Registry Converter - Advanced Filter")
+        self.root.geometry("900x800")
+        self.root.resizable(True, True)
         
         try:
             self.root.iconbitmap(default='icon.ico')
@@ -32,7 +33,14 @@ class ModbusConverterGUI:
         self.output_file = tk.StringVar()
         self.output_format = tk.StringVar(value="csv")
         self.validate_var = tk.BooleanVar(value=False)
+        self.use_filter = tk.BooleanVar(value=False)
+        self.filter_mode = tk.StringVar(value="include")
         self.conversion_running = False
+        
+        self.registry_filter = RegistryFilter()
+        self.selected_filter_categories = set()
+        self.excluded_keywords = set()
+        self.included_keywords = set()
         
         self._setup_ui()
         
@@ -46,19 +54,22 @@ class ModbusConverterGUI:
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         
+        # Title
         title_label = ttk.Label(
             main_frame,
-            text="Modbus Registry Converter",
-            font=("Arial", 16, "bold")
+            text="Modbus Registry Converter - Advanced Filter",
+            font=("Arial", 14, "bold")
         )
         title_label.grid(row=0, column=0, columnspan=3, pady=10)
         
+        # File Selection Sections
         self._create_file_section(main_frame, "Input File", 1, self.input_file, "Select Input File", 
                                   [("CSV Files", "*.csv"), ("Excel Files", "*.xlsx;*.xls"), ("PDF Files", "*.pdf"), ("All Files", "*.*")])
         
         self._create_file_section(main_frame, "Output Directory", 4, self.output_file, "Select Output Directory",
                                   is_save=True)
         
+        # Output Format Section
         format_frame = ttk.LabelFrame(main_frame, text="Output Format", padding="10")
         format_frame.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         format_frame.columnconfigure(0, weight=1)
@@ -68,15 +79,20 @@ class ModbusConverterGUI:
         ttk.Radiobutton(format_frame, text="Excel", variable=self.output_format, 
                        value="excel").pack(side=tk.LEFT, padx=10)
         
+        # Filter Section
+        self._create_filter_section(main_frame, 8)
+        
+        # Options Section
         options_frame = ttk.LabelFrame(main_frame, text="Options", padding="10")
-        options_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        options_frame.grid(row=14, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         options_frame.columnconfigure(0, weight=1)
         
         ttk.Checkbutton(options_frame, text="Validate Data", 
                        variable=self.validate_var).pack(side=tk.LEFT, padx=10)
         
+        # Progress Section
         progress_frame = ttk.LabelFrame(main_frame, text="Conversion Status", padding="10")
-        progress_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        progress_frame.grid(row=15, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         progress_frame.columnconfigure(0, weight=1)
         
         self.progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate')
@@ -85,25 +101,13 @@ class ModbusConverterGUI:
         self.status_label = ttk.Label(progress_frame, text="Ready", foreground="green")
         self.status_label.pack(pady=5)
         
+        # Buttons Section
         buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.grid(row=10, column=0, columnspan=3, pady=20)
+        buttons_frame.grid(row=16, column=0, columnspan=3, pady=20)
         
         ttk.Button(buttons_frame, text="Convert", command=self._on_convert).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons_frame, text="Reset", command=self._on_reset).pack(side=tk.LEFT, padx=5)
         ttk.Button(buttons_frame, text="Exit", command=self.root.quit).pack(side=tk.LEFT, padx=5)
-        
-        info_frame = ttk.LabelFrame(main_frame, text="Information", padding="10")
-        info_frame.grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
-        info_frame.columnconfigure(0, weight=1)
-        
-        info_text = "Convert CSV, Excel, and PDF files to unified format\n"
-        info_text += "- Select input file\n"
-        info_text += "- Choose output directory\n"
-        info_text += "- Select output format\n"
-        info_text += "- Click Convert"
-        
-        info_label = ttk.Label(info_frame, text=info_text, justify=tk.LEFT)
-        info_label.pack(anchor=tk.W)
     
     def _create_file_section(self, parent, title, row, var, dialog_title, file_types=None, is_save=False):
         """Create a file selection section"""
@@ -131,6 +135,119 @@ class ModbusConverterGUI:
                 command=lambda: self._select_input_file(var, dialog_title, file_types)
             )
         browse_btn.grid(row=0, column=2, padx=5)
+    
+    def _create_filter_section(self, parent, row):
+        """Create filter configuration section"""
+        
+        filter_frame = ttk.LabelFrame(parent, text="Advanced Filter (Optional)", padding="10")
+        filter_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        filter_frame.columnconfigure(0, weight=1)
+        
+        # Enable filter checkbox
+        ttk.Checkbutton(filter_frame, text="Enable Filtering", 
+                       variable=self.use_filter, command=self._on_filter_toggle).pack(anchor=tk.W, pady=5)
+        
+        # Filter mode selection
+        mode_frame = ttk.Frame(filter_frame)
+        mode_frame.pack(anchor=tk.W, pady=5)
+        
+        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(mode_frame, text="Include", variable=self.filter_mode, 
+                       value="include").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(mode_frame, text="Exclude", variable=self.filter_mode, 
+                       value="exclude").pack(side=tk.LEFT, padx=5)
+        
+        # Categories section
+        cat_label = ttk.Label(filter_frame, text="Register Categories:")
+        cat_label.pack(anchor=tk.W, pady=(10, 5))
+        
+        self.category_vars = {}
+        categories = self.registry_filter.get_available_categories()
+        
+        for idx, (category, info) in enumerate(categories.items()):
+            var = tk.BooleanVar()
+            self.category_vars[category] = var
+            
+            ttk.Checkbutton(
+                filter_frame,
+                text=f"{category.capitalize()} - {info['description']}",
+                variable=var,
+                command=self._update_selected_categories
+            ).pack(anchor=tk.W, padx=20, pady=2)
+        
+        # Presets section
+        preset_frame = ttk.LabelFrame(filter_frame, text="Filter Presets", padding="10")
+        preset_frame.pack(fill=tk.X, pady=10)
+        preset_frame.columnconfigure(0, weight=1)
+        
+        presets = get_filter_presets()
+        
+        for preset_name, preset_config in presets.items():
+            ttk.Button(
+                preset_frame,
+                text=f"{preset_name.replace('_', ' ').title()}",
+                command=lambda name=preset_name, config=preset_config: self._apply_preset(name, config)
+            ).pack(side=tk.LEFT, padx=5, pady=5)
+        
+        # Keywords section
+        keywords_frame = ttk.LabelFrame(filter_frame, text="Custom Keywords", padding="10")
+        keywords_frame.pack(fill=tk.X, pady=10)
+        keywords_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(keywords_frame, text="Include (comma-separated):").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.include_keywords_entry = ttk.Entry(keywords_frame)
+        self.include_keywords_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        
+        ttk.Label(keywords_frame, text="Exclude (comma-separated):").grid(row=1, column=0, sticky=tk.W, padx=5)
+        self.exclude_keywords_entry = ttk.Entry(keywords_frame)
+        self.exclude_keywords_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
+        
+        # Disable initially
+        self._on_filter_toggle()
+    
+    def _on_filter_toggle(self):
+        """Enable/disable filter controls"""
+        state = tk.NORMAL if self.use_filter.get() else tk.DISABLED
+        
+        for var in self.category_vars.values():
+            # Cannot directly disable checkbuttons, so we'll handle in conversion
+            pass
+        
+        self.include_keywords_entry.config(state=state)
+        self.exclude_keywords_entry.config(state=state)
+    
+    def _update_selected_categories(self):
+        """Update selected filter categories"""
+        self.selected_filter_categories = {
+            cat for cat, var in self.category_vars.items() if var.get()
+        }
+    
+    def _apply_preset(self, preset_name, preset_config):
+        """Apply a filter preset"""
+        
+        # Reset all categories
+        for var in self.category_vars.values():
+            var.set(False)
+        
+        # Apply categories from preset
+        for category in preset_config.get('categories', []):
+            if category in self.category_vars:
+                self.category_vars[category].set(True)
+        
+        # Apply excluded keywords
+        excluded = preset_config.get('excluded_keywords', [])
+        self.exclude_keywords_entry.delete(0, tk.END)
+        if excluded:
+            self.exclude_keywords_entry.insert(0, ', '.join(excluded))
+        
+        # Apply included keywords
+        included = preset_config.get('included_keywords', [])
+        self.include_keywords_entry.delete(0, tk.END)
+        if included:
+            self.include_keywords_entry.insert(0, ', '.join(included))
+        
+        self._update_selected_categories()
+        messagebox.showinfo("Preset Applied", f"Preset '{preset_name}' applied successfully!")
     
     def _select_input_file(self, var, dialog_title, file_types):
         """Open file dialog to select input file"""
@@ -171,7 +288,7 @@ class ModbusConverterGUI:
         thread.start()
     
     def _perform_conversion(self):
-        """Perform the actual conversion"""
+        """Perform the actual conversion with optional filtering"""
         
         try:
             self.conversion_running = True
@@ -183,6 +300,7 @@ class ModbusConverterGUI:
             output_dir = Path(self.output_file.get())
             output_format = self.output_format.get()
             validate = self.validate_var.get()
+            use_filter = self.use_filter.get()
             
             file_ext = input_path.suffix.lower()
             
@@ -199,6 +317,29 @@ class ModbusConverterGUI:
             
             processor = DataProcessor()
             processed_data = processor.process(data)
+            
+            # Apply filter if enabled
+            filter_report = None
+            if use_filter and self.selected_filter_categories:
+                registry_filter = RegistryFilter()
+                
+                registry_filter.select_categories(list(self.selected_filter_categories))
+                
+                # Parse keywords
+                include_keywords_str = self.include_keywords_entry.get()
+                if include_keywords_str.strip():
+                    keywords = [kw.strip() for kw in include_keywords_str.split(',')]
+                    registry_filter.add_included_keywords(keywords)
+                
+                exclude_keywords_str = self.exclude_keywords_entry.get()
+                if exclude_keywords_str.strip():
+                    keywords = [kw.strip() for kw in exclude_keywords_str.split(',')]
+                    registry_filter.add_excluded_keywords(keywords)
+                
+                processed_data, filter_report = registry_filter.filter_records(
+                    processed_data,
+                    category_mode=self.filter_mode.get()
+                )
             
             validation_results = None
             if validate:
@@ -217,8 +358,14 @@ class ModbusConverterGUI:
                 converter.save_excel(processed_data, output_path)
             
             message = f"Conversion completed successfully!\n\n"
-            message += f"Records: {len(processed_data)}\n"
+            message += f"Records processed: {len(processed_data)}\n"
             message += f"Output: {output_path}\n"
+            
+            if filter_report:
+                message += f"\nFilter Report:\n"
+                message += f"Total input records: {filter_report['total_records']}\n"
+                message += f"Filtered records: {filter_report['filtered_records']}\n"
+                message += f"Excluded records: {filter_report['excluded_records']}\n"
             
             if validation_results and validation_results['warnings']:
                 message += f"\nWarnings: {len(validation_results['warnings'])}"
@@ -243,6 +390,15 @@ class ModbusConverterGUI:
         self.output_file.set(str(OUTPUT_DIR))
         self.output_format.set("csv")
         self.validate_var.set(False)
+        self.use_filter.set(False)
+        self.filter_mode.set("include")
+        
+        for var in self.category_vars.values():
+            var.set(False)
+        
+        self.include_keywords_entry.delete(0, tk.END)
+        self.exclude_keywords_entry.delete(0, tk.END)
+        
         self.status_label.config(text="Ready", foreground="green")
         self.progress_bar.stop()
 
