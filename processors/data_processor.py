@@ -494,12 +494,13 @@ class AdvancedDataProcessor:
         
         value_str = str(value).lower().strip()
         
-        # Check for different access patterns
-        if 'rw' in value_str or 'read/write' in value_str or 'read-write' in value_str:
+        # Check for read/write first (must precede individual read/write checks)
+        if ('rw' in value_str or 'read/write' in value_str or 'read-write' in value_str
+                or 'readwrite' in value_str):
             return 'Read/Write'
-        elif 'write' in value_str or value_str == 'w':
+        elif ('write' in value_str and 'read' not in value_str) or (value_str == 'w'):
             return 'Write'
-        elif 'read' in value_str or value_str == 'r':
+        elif ('read' in value_str and 'write' not in value_str) or (value_str == 'r'):
             return 'Read'
         
         return 'Read'
