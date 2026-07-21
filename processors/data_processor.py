@@ -234,11 +234,21 @@ class SmartColumnDetector:
 class SmartAddressParser:
     """Parse Modbus addresses"""
     
+    # Maps the leading digit of a 5-digit Modicon address to the Modbus function code:
+    # 0xxxx → FC1 (Coils), 1xxxx → FC2 (Discrete Inputs),
+    # 3xxxx → FC4 (Input Registers), 4xxxx → FC3 (Holding Registers)
+    FIRST_DIGIT_TO_FC = {
+        0: 1,
+        1: 2,
+        3: 4,
+        4: 3,
+    }
+    
     FUNCTION_CODE_RANGES = {
         1: (0, 9999),
         2: (10000, 19999),
-        3: (30000, 39999),
-        4: (40000, 49999),
+        4: (30000, 39999),
+        3: (40000, 49999),
     }
     
     def parse_address(self, address_value):
@@ -264,11 +274,11 @@ class SmartAddressParser:
         if len(addr_str_num) >= 5:
             first_digit = int(addr_str_num[0])
             
-            if first_digit in [1, 2, 3, 4]:
+            if first_digit in self.FIRST_DIGIT_TO_FC:
                 potential_addr = addr_int - (first_digit * 10000)
                 
                 if 0 <= potential_addr <= 65535:
-                    extracted_fc = first_digit
+                    extracted_fc = self.FIRST_DIGIT_TO_FC[first_digit]
                     extracted_addr = potential_addr
         
         if extracted_addr is None:
@@ -282,7 +292,7 @@ class SmartAddressParser:
         for fc, (min_addr, max_addr) in self.FUNCTION_CODE_RANGES.items():
             if min_addr <= address <= max_addr:
                 return fc
-        return 4
+        return 3
 
 
 class AdvancedDataProcessor:
@@ -424,8 +434,8 @@ class AdvancedDataProcessor:
         fc_to_type = {
             1: 'Coil',
             2: 'Discrete Input',
-            3: 'Input Register',
-            4: 'Holding Register',
+            3: 'Holding Register',
+            4: 'Input Register',
             16: 'Holding Register',
             23: 'Holding Register',
         }
@@ -487,9 +497,9 @@ class AdvancedDataProcessor:
         # Check for different access patterns
         if 'rw' in value_str or 'read/write' in value_str or 'read-write' in value_str:
             return 'Read/Write'
-        elif 'w' in value_str and 'r' not in value_str:
+        elif 'write' in value_str or value_str == 'w':
             return 'Write'
-        elif 'r' in value_str:
+        elif 'read' in value_str or value_str == 'r':
             return 'Read'
         
         return 'Read'
